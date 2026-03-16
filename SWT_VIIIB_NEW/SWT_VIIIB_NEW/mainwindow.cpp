@@ -1,276 +1,755 @@
 #include "mainwindow.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QDebug>
-#include <QStatusBar>
+#include <QSplitter>
+#include <QLabel>
+#include <QTimer>
+#include <QFontDatabase>
+#include <QApplication>
+#include <QRandomGenerator>
 #include <QMessageBox>
-#include <QDockWidget>
-#include <QTime>
-MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent)
-{
-    setupUI();
-    updateStatusBar();
-}
-
-MainWindow::~MainWindow()
-{
-}
-
-void MainWindow::setupUI()
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     setWindowTitle("高压开关机械特性测试系统");
-    resize(1280, 800);
+    resize(1360, 860);
 
-    // 中心部件
-    QWidget *central = new QWidget(this);
+    buildInterface();
+    applyGlobalStyles();
+    setupCurvePage();
+    setupDashboardPage();
+    // 默认选中导航第一项 → 显示曲线页
+    sidebar->setCurrentRow(0);
+}
+
+MainWindow::~MainWindow() = default;
+
+void MainWindow::buildInterface()
+{
+    central = new QWidget(this);
     setCentralWidget(central);
 
-    QHBoxLayout *mainLayout = new QHBoxLayout(central);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->setSpacing(0);
+    rootLayout = new QVBoxLayout(central);
+    rootLayout->setContentsMargins(0, 0, 0, 0);
+    rootLayout->setSpacing(0);
 
-    // ====================== 左侧导航栏 ======================
-    navPanel = new QWidget;
-    navPanel->setObjectName("navPanel");
-    navPanel->setFixedWidth(240);
-    navPanel->setStyleSheet("background-color: #2c3e50; color: white;");
+    // ────────────── 顶部栏 ──────────────
+    topPanel = new QWidget();
+    topPanel->setFixedHeight(52);
+    QHBoxLayout *topLay = new QHBoxLayout(topPanel);
+    topLay->setContentsMargins(16, 0, 16, 0);
+    topLay->setSpacing(12);
 
-    QVBoxLayout *navLayout = new QVBoxLayout(navPanel);
-    navLayout->setContentsMargins(0, 0, 0, 0);
+    pathLabel = new QLabel("Home > 测试管理");
+    pathLabel->setStyleSheet("color:#b0b0b0; font-size:13px;");
+    topLay->addWidget(pathLabel);
 
-    // 折叠按钮
-    btnToggleNav = new QToolButton;
-    btnToggleNav->setText("<<");
-    btnToggleNav->setStyleSheet("background-color: #34495e; color: white; font-size: 16px;");
-    connect(btnToggleNav, &QToolButton::clicked, this, &MainWindow::on_btnToggleNav_clicked);
-    navLayout->addWidget(btnToggleNav);
+    topLay->addStretch();
 
-    // 菜单列表
-    listNav = new QListWidget;
-    listNav->setStyleSheet("QListWidget { background: transparent; border: none; color: white; }"
-                           "QListWidget::item { padding: 14px; font-size: 15px; }"
-                           "QListWidget::item:selected { background: #34495e; }");
-    listNav->addItems({"仪表盘", "设备连接", "电压调节", "采样控制", "波形分析", "历史记录", "报表导出"});
-    connect(listNav, &QListWidget::currentRowChanged, this, &MainWindow::onNavItemClicked);
-    navLayout->addWidget(listNav);
+    protocolCombo = new QComboBox();
+    protocolCombo->addItems({"UDP", "TCP", "串口"});
+    protocolCombo->setFixedWidth(110);
+    topLay->addWidget(protocolCombo);
 
-    mainLayout->addWidget(navPanel);
+    ipEdit = new QLineEdit("127.0.0.1");
+    ipEdit->setPlaceholderText("IP");
+    ipEdit->setFixedWidth(150);
+    topLay->addWidget(ipEdit);
 
-    // ====================== 右侧主区域 ======================
-    QWidget *rightPanel = new QWidget;
-    QVBoxLayout *rightLayout = new QVBoxLayout(rightPanel);
-    rightLayout->setContentsMargins(10, 10, 10, 10);
+    portEdit = new QLineEdit("5000");
+    portEdit->setPlaceholderText("端口");
+    portEdit->setFixedWidth(90);
+    topLay->addWidget(portEdit);
 
-    // 顶部工具栏
-    QWidget *topBar = new QWidget;
-    topBar->setMaximumHeight(60);
-    QHBoxLayout *topLayout = new QHBoxLayout(topBar);
+    connectBtn = new QPushButton("连接设备");
+    connectBtn->setFixedWidth(110);
+    topLay->addWidget(connectBtn);
 
-    QLabel *breadcrumb = new QLabel("Home > 测试管理");
-    breadcrumb->setStyleSheet("font-size: 15px; color: #333;");
+    rootLayout->addWidget(topPanel);
 
-    comboProtocol = new QComboBox;
-    comboProtocol->addItems({"UDP", "TCP"});
+    // ────────────── 中间 Splitter ──────────────
+    QSplitter *split = new QSplitter(Qt::Horizontal);
+    split->setHandleWidth(2);
 
-    leIP = new QLineEdit("127.0.0.1");
-    lePort = new QLineEdit("5000");
+    // 左侧导航栏
+    QWidget *leftSide = new QWidget();
+    leftSide->setFixedWidth(240);
+    QVBoxLayout *leftLay = new QVBoxLayout(leftSide);
+    leftLay->setContentsMargins(0, 10, 0, 10);
+    leftLay->setSpacing(2);
 
-    btnConnect = new QPushButton("连接设备");
-    connect(btnConnect, &QPushButton::clicked, this, &MainWindow::on_btnConnect_clicked);
+    sidebar = new QListWidget();
+    sidebar->setIconSize(QSize(22, 22));
+    sidebar->setStyleSheet("QListWidget::item{padding:12px 18px;}");
 
-    topLayout->addWidget(breadcrumb);
-    topLayout->addStretch();
-    topLayout->addWidget(new QLabel("协议:"));
-    topLayout->addWidget(comboProtocol);
-    topLayout->addWidget(new QLabel("IP:"));
-    topLayout->addWidget(leIP);
-    topLayout->addWidget(new QLabel("端口:"));
-    topLayout->addWidget(lePort);
-    topLayout->addWidget(btnConnect);
+    QStringList menu = {
+        "仪表盘", "设备连接", "电压调节",
+        "采样控制", "波形分析", "历史记录", "报表导出"
+    };
 
-    rightLayout->addWidget(topBar);
+    for (const auto &txt : menu) {
+        auto *item = new QListWidgetItem(txt);
+        sidebar->addItem(item);
+    }
 
-    // 曲线占位区（占满剩余空间）
-    plotContainer = new QWidget;
-    plotContainer->setStyleSheet("background-color: #f8f9fa; border: 1px solid #ddd;");
-    QVBoxLayout *plotLayout = new QVBoxLayout(plotContainer);
-    QLabel *placeholder = new QLabel("曲线显示区\n（后续放置 QCustomPlot）", plotContainer);
-    placeholder->setAlignment(Qt::AlignCenter);
-    placeholder->setStyleSheet("font-size: 28px; color: #888;");
-    plotLayout->addWidget(placeholder);
-    rightLayout->addWidget(plotContainer, 1);  // 拉伸填充
+    leftLay->addWidget(sidebar);
+    split->addWidget(leftSide);
 
-    // 底部操作栏
-    QWidget *bottomBar = new QWidget;
-    bottomBar->setMaximumHeight(55);
-    QHBoxLayout *bottomLayout = new QHBoxLayout(bottomBar);
+    // 中央内容
+    contentStack = new QStackedWidget();
+    split->addWidget(contentStack);
 
-    btnOneClickTest = new QPushButton("一键测试");
-    btnOneClickTest->setStyleSheet("background-color: #27ae60; color: white; font-size: 18px; padding: 12px;");
-    connect(btnOneClickTest, &QPushButton::clicked, this, &MainWindow::on_btnOneClickTest_clicked);
+    rootLayout->addWidget(split, 1);
+
+    // ────────────── 底部操作栏 ──────────────
+    footer = new QWidget();
+    footer->setFixedHeight(64);
+    QHBoxLayout *footLay = new QHBoxLayout(footer);
+    footLay->setContentsMargins(16, 10, 16, 10);
+    footLay->setSpacing(16);
+
+    btnOneKey = new QPushButton("一键测试");
+    btnOneKey->setFixedHeight(44);
+    btnOneKey->setMinimumWidth(140);
+    footLay->addWidget(btnOneKey);
 
     btnIOInit = new QPushButton("IO 初始化");
-    btnVoltageReg = new QPushButton("电压调节");
-    connect(btnIOInit, &QPushButton::clicked, this, &MainWindow::on_btnIOInit_clicked);
-    connect(btnVoltageReg, &QPushButton::clicked, this, &MainWindow::on_btnVoltageReg_clicked);
+    btnIOInit->setFixedHeight(44);
+    footLay->addWidget(btnIOInit);
 
-    progressBar = new QProgressBar;
-    progressBar->setValue(0);
+    btnVoltAdj = new QPushButton("电压调节");
+    btnVoltAdj->setFixedHeight(44);
+    footLay->addWidget(btnVoltAdj);
 
-    bottomLayout->addWidget(btnOneClickTest);
-    bottomLayout->addWidget(btnIOInit);
-    bottomLayout->addWidget(btnVoltageReg);
-    bottomLayout->addWidget(progressBar);
+    testProgress = new QProgressBar();
+    testProgress->setRange(0, 100);
+    testProgress->setValue(0);
+    testProgress->setFormat(" %p% ");
+    footLay->addWidget(testProgress, 1);
 
-    rightLayout->addWidget(bottomBar);
+    rootLayout->addWidget(footer);
 
-    mainLayout->addWidget(rightPanel);
+    // ────────────── 日志 Dock ──────────────
+    logDock = new QDockWidget("运行日志", this);
+    logDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
+    logView = new QTextEdit();
+    logView->setReadOnly(true);
+    logDock->setWidget(logView);
+    addDockWidget(Qt::BottomDockWidgetArea, logDock);
 
-    // 日志区（DockWidget）
-    QDockWidget *dockLog = new QDockWidget("日志", this);
-    plainLog = new QPlainTextEdit;
-    plainLog->setReadOnly(true);
-    dockLog->setWidget(plainLog);
-    addDockWidget(Qt::BottomDockWidgetArea, dockLog);
-
-    // 状态栏
-    statusBar()->showMessage("未连接 | 协议：UDP");
+    // 信号槽
+    connect(sidebar, &QListWidget::currentItemChanged, this, &MainWindow::onNavigationChanged);
+    connect(connectBtn, &QPushButton::clicked, this, &MainWindow::onConnectButtonClicked);
+    connect(btnOneKey, &QPushButton::clicked, this, &MainWindow::onOneKeyTestClicked);
 }
 
-void MainWindow::on_btnToggleNav_clicked()
+void MainWindow::applyGlobalStyles()
 {
-    navCollapsed = !navCollapsed;
-
-
-    if (navPanel && listNav && btnToggleNav) {
-        if (navCollapsed) {
-            listNav->setVisible(false);            // 隐藏菜单列表
-            navPanel->setFixedWidth(50);           // 只留按钮宽度
-            btnToggleNav->setText(">>");
-        } else {
-            listNav->setVisible(true);
-            navPanel->setFixedWidth(240);
-            btnToggleNav->setText("<<");
+    QString style = R"(
+        QMainWindow {
+            background: #0a0f1a;                /* 深蓝黑背景，贴近你的图片 */
         }
 
-        centralWidget()->layout()->invalidate();
-        centralWidget()->layout()->activate();
-        centralWidget()->update();
-    }
-}
-
-void MainWindow::onNavItemClicked(int index)
-{
-    qDebug() << "导航菜单点击：" << index;
-    // 后续根据 index 切换页面
-}
-
-void MainWindow::updateStatusBar()
-{
-    QString protocol = comboProtocol ? comboProtocol->currentText() : "未知";
-    statusBar()->showMessage(QString("未连接 | 协议：%1").arg(protocol));
-}
-
-void MainWindow::on_btnConnect_clicked()
-{
-    if (m_comm && m_comm->isOpen()) {
-        m_comm->close();
-        delete m_comm;
-        m_comm = nullptr;
-        btnConnect->setText("连接设备");
-        updateStatusBar();
-        return;
-    }
-
-    QString protocol = comboProtocol->currentText().toUpper();
-    QString ip = leIP->text().trimmed();
-    quint16 port = lePort->text().toUShort();
-
-    if (ip.isEmpty() || port == 0) {
-        QMessageBox::warning(this, "参数错误", "请填写有效的 IP 和端口");
-        return;
-    }
-
-    // 使用接口的静态工厂方法创建
-    m_comm = ICommunicator::create(protocol, this);
-    if (!m_comm) {
-        QMessageBox::warning(this, "协议错误", "不支持的协议类型: " + protocol);
-        return;
-    }
-
-    QVariantMap params;
-    params["ip"] = ip;
-    params["port"] = port;
-
-    if (!m_comm->open(params)) {
-        QString err = m_comm->lastError();
-        plainLog->appendPlainText("连接失败：" + err);
-        delete m_comm;
-        m_comm = nullptr;
-        return;
-    }
-
-    m_currentProtocol = protocol;
-    btnConnect->setText("断开连接");
-    updateStatusBar();
-    plainLog->appendPlainText("已连接到 " + protocol + " " + ip + ":" + QString::number(port));
-
-    // 连接其他信号...
-}
-void MainWindow::on_btnIOInit_clicked()
-{
-    if (!m_comm || !m_comm->isOpen()) {
-        QMessageBox::warning(this, "未连接", "请先连接设备");
-        plainLog->appendPlainText("[" + QTime::currentTime().toString("hh:mm:ss") + "] IO 初始化失败：未连接设备");
-        return;
-    }
-
-    // 禁用按钮，防止重复点击
-    btnIOInit->setEnabled(false);
-    btnIOInit->setText("初始化中...");
-    progressBar->setValue(0);
-    progressBar->setRange(0, 100);
-
-    plainLog->appendPlainText("[" + QTime::currentTime().toString("hh:mm:ss") + "] 开始 IO 初始化...");
-
-    // 构造 IO 初始化命令（示例：4字节命令）
-    QByteArray initCmd(4, 0x00);
-    initCmd[0] = 0xA0;     // 命令头
-    initCmd[1] = 0x01;     // 子命令：初始化
-    initCmd[2] = 0x00;     // 保留
-    initCmd[3] = 0x00;     // 保留
-
-    // 发送并等待响应（同步方式，超时 2000ms）
-    QByteArray response = m_comm->sendAndReceive(initCmd, 2000, 2);  // 超时2秒，重试2次
-
-    if (response.isEmpty()) {
-        QString err = m_comm->lastError();
-        plainLog->appendPlainText("[" + QTime::currentTime().toString("hh:mm:ss") + "] IO 初始化失败：" + err);
-        statusBar()->showMessage("IO 初始化失败：" + err);
-        QMessageBox::critical(this, "失败", "IO 初始化无响应或超时");
-    } else {
-        // 解析响应（示例：假设成功响应是 0xA0 0x01 0x00 0x00）
-        if (response.size() >= 4 && int(response[0]) == 0xA0 && response[1] == 0x01) {
-            plainLog->appendPlainText("[" + QTime::currentTime().toString("hh:mm:ss") + "] IO 初始化成功");
-            statusBar()->showMessage("IO 初始化成功");
-            progressBar->setValue(100);
-
-            // 可选：自动刷新某些状态
-            // m_comm->sendAsync(某个查询命令);
-        } else {
-            plainLog->appendPlainText("[" + QTime::currentTime().toString("hh:mm:ss") + "] IO 初始化响应异常：" + response.toHex(' ').toUpper());
-            QMessageBox::warning(this, "警告", "IO 初始化响应异常");
-            progressBar->setValue(0);
+        QWidget {
+            color: #d0e0ff;                     /* 浅蓝白文字，高对比 */
+            font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+            font-size: 13px;
         }
+
+        QSplitter::handle {
+            background: #1a2a3a;                /* 微蓝分隔条 */
+            width: 2px;
+        }
+
+        /* 左侧导航栏 */
+        QListWidget {
+            background: #0f1622;
+            border-right: 1px solid #1e2a3f;
+        }
+
+        QListWidget::item {
+            padding: 12px 18px;
+            border-radius: 4px;
+            color: #a0b0d0;
+        }
+
+        QListWidget::item:selected {
+            background: #1e3a5a;                /* 选中深蓝 */
+            color: #ffffff;
+            border-left: 4px solid #00bfff;     /* 青蓝光条，贴近你的高亮 */
+        }
+
+        QListWidget::item:hover {
+            background: #152535;
+        }
+
+        /* 顶部连接区 */
+        QComboBox, QLineEdit {
+            background: #111822;
+            color: #d0e0ff;
+            border: 1px solid #2a3a50;
+            border-radius: 4px;
+            padding: 6px;
+        }
+
+        QPushButton#connectBtn {
+            background: #1e3a5a;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+        }
+
+        QPushButton#connectBtn:hover {
+            background: #2a4a6a;
+        }
+
+        QPushButton#connectBtn[connected="true"] {
+            background: #00b050;                /* 连接成功绿（可调成青蓝） */
+        }
+
+        /* 一键测试按钮 - 保持你的原绿，但加 cyan 变体可选 */
+        QPushButton#onekey {
+            background: #27ae60;                /* 原绿 */
+            color: white;
+            border: none;
+            font: bold 15px;
+            border-radius: 6px;
+            min-height: 44px;
+        }
+
+        QPushButton#onekey:hover {
+            background: #00c080;                /* hover 偏 cyan 绿 */
+        }
+
+        QPushButton#onekey:pressed {
+            background: #1e8a4a;
+        }
+
+        /* 进度条 - 青蓝填充 */
+        QProgressBar {
+            background: #111822;
+            border: 1px solid #2a3a50;
+            border-radius: 4px;
+            text-align: center;
+            color: #d0e0ff;
+        }
+
+        QProgressBar::chunk {
+            background: #00bfff;                /* 青蓝进度条，贴近你的风格 */
+            border-radius: 3px;
+        }
+
+        /* 日志区 - 深黑 + 青绿/白文字 */
+        QTextEdit {
+            background: #050a12;
+            color: #c0ffd0;                     /* 浅绿日志文字 */
+            border-top: 1px solid #1e2a3f;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 12px;
+        }
+
+        /* QCustomPlot 暗黑 + 青蓝曲线 */
+        QCustomPlot {
+            background: #0a101c;
+        }
+
+        /* 其他按钮（如 IO初始化、电压调节） */
+        QPushButton {
+            background: #1e2a3a;
+            color: #d0e0ff;
+            border: 1px solid #2a3a50;
+            border-radius: 4px;
+        }
+
+        QPushButton:hover {
+            background: #2a3a50;
+        }
+    )";
+
+    // 设置 objectName 以匹配 QSS
+    btnOneKey->setObjectName("onekey");
+    connectBtn->setObjectName("connectBtn");
+
+    qApp->setStyleSheet(style);
+}
+
+// void MainWindow::applyGlobalStyles()
+// {
+//     QString style = R"(
+//         QMainWindow {
+//             background: #181818;
+//         }
+
+//         QSplitter::handle {
+//             background: #2a2a2a;
+//             width: 2px;
+//         }
+
+//         /* 通用按钮 */
+//         QPushButton {
+//             background: #2e2e2e;
+//             color: #e8e8e8;
+//             border: 1px solid #3c3c3c;
+//             border-radius: 4px;
+//             padding: 6px 14px;
+//         }
+
+//         QPushButton:hover {
+//             background: #3c3c3c;
+//         }
+
+//         QPushButton:pressed {
+//             background: #252525;
+//         }
+
+//         /* 一键测试 - 核心绿色强调 */
+//         QPushButton#onekey {
+//             background: #27ae60;
+//             color: white;
+//             border: none;
+//             font: bold 15px;
+//             border-radius: 6px;
+//             min-height: 44px;
+//         }
+
+//         QPushButton#onekey:hover {
+//             background: #2ecc71;          /* 鼠标悬停更亮 */
+//         }
+
+//         QPushButton#onekey:pressed {
+//             background: #1e8449;          /* 按下更深 */
+//         }
+
+//         /* 进度条 - 绿色填充 */
+//         QProgressBar {
+//             background: #2e2e2e;
+//             border: 1px solid #3c3c3c;
+//             border-radius: 4px;
+//             text-align: center;
+//             color: #ccc;
+//         }
+
+//         QProgressBar::chunk {
+//             background: #27ae60;
+//             border-radius: 3px;
+//         }
+
+//         /* 左侧导航选中 */
+//         QListWidget::item:selected {
+//             background: #27ae60;          /* 用你的绿突出选中 */
+//             color: white;
+//         }
+
+//         QListWidget::item {
+//             padding: 12px 18px;
+//             border-radius: 4px;
+//         }
+
+//         /* 输入框、下拉框 */
+//         QLineEdit, QComboBox {
+//             background: #222222;
+//             color: #dddddd;
+//             border: 1px solid #444444;
+//             border-radius: 4px;
+//             padding: 5px;
+//         }
+
+//         QComboBox::drop-down {
+//             border: none;
+//         }
+
+//         /* 日志区 - 深黑 + 浅绿文字 */
+//         QTextEdit {
+//             background: #0f0f0f;
+//             color: #d0ffd0;               /* 浅绿调日志，更舒适 */
+//             font-family: Consolas, monospace;
+//             font-size: 13px;
+//         }
+
+//         /* 连接按钮 - 成功时变绿 */
+//         QPushButton#connectBtn[connected="true"] {
+//             background: #388e3c;
+//             color: white;
+//         }
+
+//         /* QCustomPlot 暗黑主题 */
+//         QCustomPlot {
+//             background: #0e0e0e;
+//         }
+//     )";
+
+//     // 为一键测试按钮设置 objectName 以匹配 QSS
+//     btnOneKey->setObjectName("onekey");
+
+//     // 为连接按钮设置 objectName（可选，后续动态改 connected 属性）
+//     connectBtn->setObjectName("connectBtn");
+
+//     qApp->setStyleSheet(style);
+// }
+// void MainWindow::applyGlobalStyles()
+// {
+//     QString style = R"(
+//         QMainWindow { background:#181818; }
+
+//         QSplitter::handle { background:#2a2a2a; width:2px; }
+
+//         QPushButton {
+//             background:#2e2e2e;
+//             color:#e8e8e8;
+//             border:1px solid #3c3c3c;
+//             border-radius:4px;
+//             padding:6px 14px;
+//         }
+//         QPushButton:hover { background:#3c3c3c; }
+
+//         QPushButton#onekey {
+//             background:#28a745;
+//             border:none;
+//             font-weight:bold;
+//             font-size:15px;
+//         }
+//         QPushButton#onekey:hover { background:#2ecc71; }
+
+//         QProgressBar {
+//             background:#2e2e2e;
+//             border:1px solid #3c3c3c;
+//             border-radius:4px;
+//             text-align:center;
+//             color:#ccc;
+//         }
+//         QProgressBar::chunk { background:#28a745; border-radius:3px; }
+
+//         QListWidget::item:selected {
+//             background:#0d47a1;
+//             color:white;
+//         }
+
+//         QLineEdit, QComboBox {
+//             background:#222;
+//             color:#ddd;
+//             border:1px solid #444;
+//             border-radius:4px;
+//             padding:5px;
+//         }
+
+//         QTextEdit { background:#0f0f0f; color:#ccc; font-family:Consolas; }
+//     )";
+
+//     btnOneKey->setObjectName("onekey");
+
+//     qApp->setStyleSheet(style);
+
+//    }
+
+void MainWindow::setupCurvePage()
+{
+    curvePage = new QWidget();
+    QVBoxLayout *lay = new QVBoxLayout(curvePage);
+    lay->setContentsMargins(20, 20, 20, 20);
+
+    plotPlaceholder = new QLabel("曲线显示区\n(QCustomPlot 将放置在这里)");
+    plotPlaceholder->setAlignment(Qt::AlignCenter);
+    plotPlaceholder->setStyleSheet("font-size:18px; color:#666; margin:60px 0;");
+    lay->addWidget(plotPlaceholder);
+
+    // mainPlot = new QCustomPlot(curvePage);
+    // mainPlot->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom);
+    // mainPlot->setStyleSheet("background:#0e0e0e;");
+    // lay->addWidget(mainPlot, 1);
+
+    contentStack->addWidget(curvePage);
+}
+
+void MainWindow::setupDashboardPage()
+{
+    pageDashboard = new QWidget();
+    QVBoxLayout *dashLayout = new QVBoxLayout(pageDashboard);
+    dashLayout->setContentsMargins(20, 20, 20, 20);
+    dashLayout->setSpacing(15);
+
+    // ── 标题 + 状态指示 ──
+    QHBoxLayout *header = new QHBoxLayout();
+    
+    QLabel *titleLabel = new QLabel("仪表盘 - 当前测试监控");
+    titleLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: #00bfff;");
+    header->addWidget(titleLabel);
+    
+    header->addStretch();
+    
+    lblStatus = new QLabel("状态：待机");
+    lblStatus->setStyleSheet(
+        "font-size: 16px; color: #ffcc00; "
+        "background: #1e2a3a; padding: 8px 16px; "
+        "border-radius: 6px;"
+    );
+    header->addWidget(lblStatus);
+    
+    dashLayout->addLayout(header);
+
+    // ── 关键参数卡片区（网格布局） ──
+    QGridLayout *grid = new QGridLayout();
+    grid->setSpacing(15);
+    grid->setContentsMargins(0, 10, 0, 10);
+
+    // 分闸时间
+    QWidget *card1 = createCard("分闸时间", "18.2 ms", "#00bfff");
+    grid->addWidget(card1, 0, 0);
+    lblTripTime = card1->findChild<QLabel*>("valueLabel");
+
+    // 三相同期差
+    QWidget *card2 = createCard("三相同期差", "45 μs", "#00ff88");
+    grid->addWidget(card2, 0, 1);
+    lblSyncDiff = card2->findChild<QLabel*>("valueLabel");
+
+    // 行程 / 开距
+    QWidget *card3 = createCard("行程 / 开距", "12.5 mm", "#ffaa00");
+    grid->addWidget(card3, 0, 2);
+    lblStroke = card3->findChild<QLabel*>("valueLabel");
+
+    // 平均速度
+    QWidget *card4 = createCard("平均速度", "1.35 m/s", "#00d4ff");
+    grid->addWidget(card4, 1, 0);
+    lblSpeed = card4->findChild<QLabel*>("valueLabel");
+
+    // 可以继续加更多卡片，例如：
+    // QWidget *card5 = createCard("触头弹跳次数", "0 次", "#ff6666");
+    // grid->addWidget(card5, 1, 1);
+
+    dashLayout->addLayout(grid);
+
+    // // ── 小型曲线预览 ──
+    // miniPlot = new QCustomPlot(pageDashboard);
+    // miniPlot->setFixedHeight(180);
+    // miniPlot->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom);
+    // miniPlot->setStyleSheet("background: #0a101c; border: 1px solid #1e2a3f; border-radius: 6px;");
+
+    // // 设置暗黑坐标轴样式
+    // miniPlot->xAxis->setBasePen(QPen(QColor("#a0b0d0")));
+    // miniPlot->yAxis->setBasePen(QPen(QColor("#a0b0d0")));
+    // miniPlot->xAxis->setTickPen(QPen(QColor("#a0b0d0")));
+    // miniPlot->yAxis->setTickPen(QPen(QColor("#a0b0d0")));
+    // miniPlot->xAxis->setSubTickPen(QPen(QColor("#2a3a50")));
+    // miniPlot->yAxis->setSubTickPen(QPen(QColor("#2a3a50")));
+
+    // dashLayout->addWidget(miniPlot);
+
+    // 把页面加入堆叠容器
+    contentStack->addWidget(pageDashboard);
+}
+
+void MainWindow::onNavigationChanged(QListWidgetItem *current, QListWidgetItem *previous)
+{
+    if (!current) return;
+
+    QString txt = current->text();
+    if (txt == "仪表盘") {
+
+       qWarning() << "12345 6789a";
+        contentStack->setCurrentWidget(pageDashboard);
+    }
+    else if (txt.contains("波形") || txt.contains("采样") || txt.contains("分析")) {
+        contentStack->setCurrentWidget(curvePage);
+    }
+    else {
+        // 其他未实现的页面，暂时显示仪表盘或曲线页作为占位
+        // 你可以根据需要改成显示一个“开发中”页面
+        contentStack->setCurrentWidget(pageDashboard);
+        // 或者 contentStack->setCurrentWidget(curvePage);
+    }
+}
+// void MainWindow::onNavigationChanged(QListWidgetItem *curr, QListWidgetItem *)
+// {
+//     if (!curr) return;
+//     QString txt = curr->text();
+
+//     // 目前所有页面都先指向曲线页（占位）
+//     // 后续可根据 txt 创建/切换不同 QWidget
+//     contentStack->setCurrentWidget(curvePage);
+// }
+
+void MainWindow::onConnectButtonClicked()
+{
+    QString proto = protocolCombo->currentText();
+    QString ip = ipEdit->text().trimmed();
+    QString port = portEdit->text().trimmed();
+
+    logView->append(QString("[INFO] %1 尝试连接 %2:%3 ...").arg(proto).arg(ip).arg(port));
+
+    // 模拟延迟
+    QTimer::singleShot(1200, this, [=](){
+        logView->append("[SUCCESS] 设备已连接");
+        connectBtn->setText("已连接");
+        connectBtn->setStyleSheet("background:#2e7d32; color:white;");
+    });
+}
+
+void MainWindow::onOneKeyTestClicked()
+{
+    logView->append("[ACTION] 一键测试启动");
+
+    testProgress->setValue(0);
+
+    QTimer *sim = new QTimer(this);
+    sim->setSingleShot(false);
+    int pct = 0;
+
+    connect(sim, &QTimer::timeout, this, [=]() mutable {
+        pct += QRandomGenerator::global()->bounded(5, 17);
+        if (pct > 100) pct = 100;
+        testProgress->setValue(pct);
+        logView->append(QString("[PROGRESS] %1%").arg(pct));
+
+        if (pct >= 100) {
+            sim->stop();
+            sim->deleteLater();
+            logView->append("[DONE] 测试完成");
+        }
+    });
+
+    sim->start(400);
+}
+
+
+void MainWindow::createPages()
+{
+    // ... 原有曲线页面代码 ...
+
+    // 新增仪表盘页面
+    pageDashboard = new QWidget();
+    QVBoxLayout *dashLayout = new QVBoxLayout(pageDashboard);
+    dashLayout->setContentsMargins(20, 20, 20, 20);
+    dashLayout->setSpacing(15);
+
+    // 标题 + 状态
+    QHBoxLayout *headerLay = new QHBoxLayout();
+    QLabel *title = new QLabel("仪表盘 - 当前测试监控");
+    title->setStyleSheet("font-size: 20px; font-weight: bold; color: #00bfff;");
+    headerLay->addWidget(title);
+
+    lblStatus = new QLabel("状态：待机");
+    lblStatus->setStyleSheet("font-size: 16px; color: #ffcc00; background: #1e2a3a; padding: 8px; border-radius: 4px;");
+    headerLay->addStretch();
+    headerLay->addWidget(lblStatus);
+
+    dashLayout->addLayout(headerLay);
+
+    // 关键参数卡片（网格布局）
+    QGridLayout *grid = new QGridLayout();
+    grid->setSpacing(15);
+
+
+    // 分闸时间
+     QWidget *card1 = createCard("分闸时间", "18.2 ms", "#00bfff");
+    grid->addWidget(card1, 0, 0);
+
+    lblTripTime = card1->findChild<QLabel*>("valueLabel");  // 后续更新用
+
+    // 同期差
+     QWidget *card2 = createCard("三相同期差", "45 μs", "#00ff88");
+    grid->addWidget(card2, 0, 1);
+
+    lblSyncDiff = card2->findChild<QLabel*>("valueLabel");
+
+    // 行程
+    QWidget *card3 = createCard("行程 / 开距", "12.5 mm", "#ffaa00");
+    grid->addWidget(card3, 0, 2);
+
+    lblStroke = card3->findChild<QLabel*>("valueLabel");
+
+    // 平均速度
+    QWidget *card4 = createCard("平均速度", "1.35 m/s", "#00d4ff");
+    grid->addWidget(card4, 1, 0);
+
+    lblSpeed = card4->findChild<QLabel*>("valueLabel");
+
+    dashLayout->addLayout(grid);
+
+    // // 小型曲线预览
+    // miniPlot = new QCustomPlot(pageDashboard);
+    // miniPlot->setFixedHeight(180);
+    // miniPlot->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom);
+    // miniPlot->setStyleSheet("background: #0a101c;");
+    // dashLayout->addWidget(miniPlot);
+
+    // // 示例曲线（占位）
+    // miniPlot->addGraph();
+    // miniPlot->graph(0)->setPen(QPen(QColor("#00bfff"), 2));
+    // // 后续用真实数据 replot
+
+    contentStack->addWidget(pageDashboard);
+
+    // 定时刷新（模拟实时）
+    dashboardTimer = new QTimer(this);
+    connect(dashboardTimer, &QTimer::timeout, this, &MainWindow::updateDashboard);
+    dashboardTimer->start(500);  // 每0.5秒刷新
+}
+// 原：QLabel* createCard(...)
+QWidget*  MainWindow::createCard(const QString &title, const QString &value, const QString &color)
+{
+    QWidget *card = new QWidget();
+    card->setStyleSheet(QString("background: #111822; border: 1px solid %1; border-radius: 8px; padding: 10px;").arg(color));
+
+    QVBoxLayout *lay = new QVBoxLayout(card);
+    lay->setSpacing(5);
+
+    QLabel *titleLbl = new QLabel(title);
+    titleLbl->setStyleSheet("color: #a0b0d0; font-size: 14px;");
+    lay->addWidget(titleLbl);
+
+    QLabel *valueLbl = new QLabel(value);
+    valueLbl->setObjectName("valueLabel");
+    valueLbl->setStyleSheet(QString("color: %1; font-size: 32px; font-weight: bold;").arg(color));
+    valueLbl->setAlignment(Qt::AlignCenter);
+    lay->addWidget(valueLbl);
+
+    return card;
+}
+
+void MainWindow::updateDashboard()
+{
+    // 模拟数据（实际替换为从协议/测试结果获取）
+    static int sim = 0;
+    sim++;
+
+    lblTripTime->setText(QString("%1 ms").arg(18.0 + sin(sim*0.1)*2, 0, 'f', 1));
+
+    lblSyncDiff->setText(QString("%1 μs").arg(QRandomGenerator::global()->bounded(40, 70)));
+  //  lblSyncDiff->setText(QString("%1 μs").arg(40 + qrand()%30));
+    lblStroke->setText(QString("%1 mm").arg(12.0 + cos(sim*0.05)*0.8, 0, 'f', 1));
+    lblSpeed->setText(QString("%1 m/s").arg(1.3 + sin(sim*0.2)*0.2, 0, 'f', 2));
+
+    // 状态变化示例
+    if (sim % 10 == 0) {
+        lblStatus->setText("状态：测试中");
+        lblStatus->setStyleSheet("font-size: 16px; color: #00ff88; background: #1e2a3a; padding: 8px; border-radius: 4px;");
+    } else if (sim % 10 == 5) {
+        lblStatus->setText("状态：异常 - 同期超差");
+        lblStatus->setStyleSheet("font-size: 16px; color: #ff4444; background: #2a1a1a; padding: 8px; border-radius: 4px;");
     }
 
-    // 恢复按钮状态
-    btnIOInit->setEnabled(true);
-    btnIOInit->setText("IO 初始化");
+    // 小曲线更新示例（后续用真实采集数据）
+    QVector<double> x(100), y(100);
+    for (int i = 0; i < 100; ++i) {
+        x[i] = i * 0.1;
+        y[i] = sin(x[i] + sim*0.05) * 100 + 1200;  // 模拟电压波形
+    }
+    // miniPlot->graph(0)->setData(x, y);
+    // miniPlot->xAxis->rescale();
+    // miniPlot->yAxis->rescale();
+    // miniPlot->replot();
 }
-// 其他槽函数（占位）
-//void MainWindow::on_btnConnect_clicked()     { QMessageBox::information(this, "提示", "连接功能待实现"); }
-void MainWindow::on_btnOneClickTest_clicked(){ QMessageBox::information(this, "提示", "一键测试功能待实现"); }
-//void MainWindow::on_btnIOInit_clicked()      { QMessageBox::information(this, "提示", "IO初始化功能待实现"); }
-void MainWindow::on_btnVoltageReg_clicked()  { QMessageBox::information(this, "提示", "电压调节功能待实现"); }
+
+
+// void MainWindow::onNavigationChanged(QListWidgetItem *curr, QListWidgetItem *)
+// {
+//     if (!curr) return;
+//     QString txt = curr->text();
+
+//     if (txt == "仪表盘") {
+//         contentStack->setCurrentWidget(pageDashboard);
+//     } else if (txt.contains("波形") || txt.contains("采样") || txt.contains("分析")) {
+//         contentStack->setCurrentWidget(curvePage);
+//     } else {
+//         // 其他页面占位
+//         contentStack->setCurrentWidget(pageDashboard);
+//     }
+// }

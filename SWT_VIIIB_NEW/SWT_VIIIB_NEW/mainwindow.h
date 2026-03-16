@@ -3,15 +3,18 @@
 
 #include <QMainWindow>
 #include <QListWidget>
-#include <QPushButton>
-#include <QLabel>
-#include <QLineEdit>
+#include <QStackedWidget>
 #include <QComboBox>
-#include <QPlainTextEdit>
+#include <QLineEdit>
+#include <QPushButton>
 #include <QProgressBar>
-#include <QToolButton>
-#include <QWidget>
-#include "ICommunicator.h"
+#include <QDockWidget>
+#include <QTextEdit>
+
+#include <QVBoxLayout>
+#include <QLabel>
+
+//#include "qcustomplot.h"   // 假设你已把 qcustomplot.h 加入项目
 
 class MainWindow : public QMainWindow
 {
@@ -20,43 +23,69 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
-private:
-    // 通信对象指针（接口指针）
-    ICommunicator *m_comm = nullptr;
-   QString m_currentProtocol = "UDP";
-
 
 private slots:
-    void on_btnConnect_clicked();
-    void on_btnOneClickTest_clicked();
-    void on_btnIOInit_clicked();
-    void on_btnVoltageReg_clicked();
-    void on_btnToggleNav_clicked();
-    void onNavItemClicked(int index);
+    void onNavigationChanged(QListWidgetItem *current, QListWidgetItem *previous);
+    void onConnectButtonClicked();
+    void onOneKeyTestClicked();
 
 private:
-    void setupUI();           // 创建所有控件和布局
-    void updateStatusBar();   // 更新状态栏信息
+    void buildInterface();
+    void applyGlobalStyles();
+    void setupCurvePage();
+    void setupDashboardPage();
+    // 核心容器
+    QWidget *central = nullptr;
+    QVBoxLayout *rootLayout = nullptr;
 
-    // 成员变量 - 所有关键控件
-    QWidget       *navPanel = nullptr;
-    QToolButton   *btnToggleNav = nullptr;
-    QListWidget   *listNav = nullptr;
-    bool           navCollapsed = false;
+    // 顶部区域
+    QWidget *topPanel = nullptr;
+    QLabel *pathLabel = nullptr;
+    QComboBox *protocolCombo = nullptr;
+    QLineEdit *ipEdit = nullptr;
+    QLineEdit *portEdit = nullptr;
+    QPushButton *connectBtn = nullptr;
 
-    QWidget       *plotContainer = nullptr;  // 曲线占位区
+    // 左侧导航
+    QListWidget *sidebar = nullptr;
 
-    QPlainTextEdit *plainLog = nullptr;
-    QProgressBar   *progressBar = nullptr;
+    // 中央内容切换
+    QStackedWidget *contentStack = nullptr;
 
-    QComboBox      *comboProtocol = nullptr;
-    QLineEdit      *leIP = nullptr;
-    QLineEdit      *lePort = nullptr;
-    QPushButton    *btnConnect = nullptr;
+    // 示例页面：曲线区
+    QWidget *curvePage = nullptr;
+   // QCustomPlot *mainPlot = nullptr;
+    QLabel *plotPlaceholder = nullptr;
 
-    QPushButton    *btnOneClickTest = nullptr;
-    QPushButton    *btnIOInit = nullptr;
-    QPushButton    *btnVoltageReg = nullptr;
+    // 底部操作区
+    QWidget *footer = nullptr;
+    QPushButton *btnOneKey = nullptr;
+    QPushButton *btnIOInit = nullptr;
+    QPushButton *btnVoltAdj = nullptr;
+    QProgressBar *testProgress = nullptr;
+
+    // 日志区
+    QDockWidget *logDock = nullptr;
+    QTextEdit *logView = nullptr;
+
+    // mainwindow.h 新增
+
+
+private:
+    QWidget *pageDashboard = nullptr;  // 仪表盘页面
+    QLabel *lblStatus = nullptr;       // 整体状态
+    QLabel *lblTripTime = nullptr;     // 分闸时间
+    QLabel *lblSyncDiff = nullptr;     // 同期差
+    QLabel *lblStroke = nullptr;       // 行程
+    QLabel *lblSpeed = nullptr;        // 平均速度
+ //   QCustomPlot *miniPlot = nullptr;   // 小型曲线预览
+    QTimer *dashboardTimer = nullptr;  // 刷新定时器
+
+    void createPages()  ;
+     void updateDashboard()  ;
+    // 原：QLabel* createCard(...)
+    QWidget* createCard(const QString &title, const QString &value, const QString &color);
+
 };
 
 #endif // MAINWINDOW_H
